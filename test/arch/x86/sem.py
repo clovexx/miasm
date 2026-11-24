@@ -157,6 +157,34 @@ class TestX86Semantic(unittest.TestCase):
         self.mmx_logical_op("PAND", op_and, MMX_V0, MMX_V1)
         self.sse_logical_op("PAND", op_and, SSE_V0, SSE_V1)
 
+    def lift_bytes(self, code):
+        """Disassemble @code and lift it; return the produced IR block."""
+        loc_db = LocationDB()
+        instr = mn.dis(code, m64)
+        lifter = Lifter_X86_64(loc_db)
+        ircfg = lifter.new_ircfg()
+        lifter.add_instr_to_ircfg(instr, ircfg)
+        return ircfg
+
+    def test_FSTP_TBYTE(self):
+        # DB /7: store ST0 as an 80-bit value. Used to raise
+        # NotImplementedError: convert to 80bits
+        self.lift_bytes(b"\xdb\x38")
+
+    def test_FLD_TBYTE(self):
+        # DB /5: load an 80-bit value into ST0. Used to raise
+        # NotImplementedError: convert from 80bits
+        self.lift_bytes(b"\xdb\x28")
+
+    def test_RETF_OPERAND_SIZE(self):
+        # 66 CB: the popped IP is 16 bits wide while IRDst is pointer sized.
+        # Used to raise AssertionError in ExprAssign / Expr.zeroExtend
+        self.lift_bytes(b"\x66\xcb")
+
+    def test_IRET_OPERAND_SIZE(self):
+        # 66 CF: same narrowing, through the IRET path
+        self.lift_bytes(b"\x66\xcf")
+
 
 
 if __name__ == '__main__':

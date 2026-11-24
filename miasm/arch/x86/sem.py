@@ -1453,6 +1453,27 @@ def call(ir, instr, dst):
     return e, []
 
 
+def _fit_size(expr, size):
+    """Widen or narrow @expr to @size bits."""
+    if expr.size == size:
+        return expr
+    if expr.size < size:
+        return expr.zeroExtend(size)
+    if expr.is_int():
+        # ExprInt has no truncate(): cut the value and rebuild the constant
+        return m2_expr.ExprInt(int(expr) & ((1 << size) - 1), size)
+    return expr.truncate(size)
+
+
+def _fit_ptr_expr(expr, dst_id):
+    """Fit a pushed IP value to the pointer-sized IR destination.
+
+    An operand-size prefix (0x66) narrows the value popped by ret/retf/iret,
+    while the IR destination register always has the pointer size.
+    """
+    return _fit_size(expr, dst_id.size)
+
+
 def ret(ir, instr, src=None):
     e = []
     meip = mRIP[ir.IRDst.size]
@@ -1470,10 +1491,10 @@ def ret(ir, instr, src=None):
     if ir.do_stk_segm:
         result = ir.gen_segm_expr(SS, result)
 
-    e.append(m2_expr.ExprAssign(meip, ir.ExprMem(
-        result, size=size).zeroExtend(size)))
-    e.append(m2_expr.ExprAssign(ir.IRDst,
-                             ir.ExprMem(result, size=size).zeroExtend(size)))
+    e.append(m2_expr.ExprAssign(meip, _fit_ptr_expr(
+        ir.ExprMem(result, size=size), meip)))
+    e.append(m2_expr.ExprAssign(ir.IRDst, _fit_ptr_expr(
+        ir.ExprMem(result, size=size), ir.IRDst)))
     return e, []
 
 
@@ -1485,16 +1506,16 @@ def retf(ir, instr, src=None):
         src = m2_expr.ExprInt(0, instr.mode)
     myesp = mRSP[instr.mode][:size]
 
-    src = src.zeroExtend(size)
+    src = _fit_size(src, size)
 
     result = myesp
     if ir.do_stk_segm:
         result = ir.gen_segm_expr(SS, result)
 
-    e.append(m2_expr.ExprAssign(meip, ir.ExprMem(
-        result, size=size).zeroExtend(size)))
-    e.append(m2_expr.ExprAssign(ir.IRDst,
-                             ir.ExprMem(result, size=size).zeroExtend(size)))
+    e.append(m2_expr.ExprAssign(meip, _fit_ptr_expr(
+        ir.ExprMem(result, size=size), meip)))
+    e.append(m2_expr.ExprAssign(ir.IRDst, _fit_ptr_expr(
+        ir.ExprMem(result, size=size), ir.IRDst)))
     # e.append(m2_expr.ExprAssign(meip, ir.ExprMem(c, size = s)))
     result = myesp + m2_expr.ExprInt(size // 8, size)
     if ir.do_stk_segm:
@@ -2390,7 +2411,8 @@ def fld(_, instr, src):
     if src.size == 32:
         src = m2_expr.ExprOp("fpconvert_fp64", src)
     if isinstance(src, m2_expr.ExprMem) and src.size > 64:
-        raise NotImplementedError('convert from 80bits')
+        # x87 80-bit load: keep the narrowing explicit in the IR
+        src = m2_expr.ExprOp("fpconvert_fp64", src)
 
     e = []
     e.append(m2_expr.ExprAssign(float_st7, float_st6))
@@ -2412,9 +2434,10 @@ def fld(_, instr, src):
 def fst(_, instr, dst):
     e = []
 
-    if isinstance(dst, m2_expr.ExprMem) and dst.size > 64:
-        raise NotImplementedError('convert to 80bits')
     src = float_st0
+    if isinstance(dst, m2_expr.ExprMem) and dst.size > 64:
+        # x87 80-bit store: keep the widening explicit in the IR
+        src = m2_expr.ExprOp("fpconvert_fp80", float_st0)
 
     if dst.size == 32:
         src = m2_expr.ExprOp("fpconvert_fp32", src)
@@ -2426,11 +2449,11 @@ def fst(_, instr, dst):
 def fstp(ir, instr, dst):
     e = []
 
-    if isinstance(dst, m2_expr.ExprMem) and dst.size > 64:
-        raise NotImplementedError('convert to 80bits')
-
     if isinstance(dst, m2_expr.ExprMem):
         src = float_st0
+        if dst.size > 64:
+            # x87 80-bit store: keep the widening explicit in the IR
+            src = m2_expr.ExprOp("fpconvert_fp80", float_st0)
         if dst.size == 32:
             src = m2_expr.ExprOp("fpconvert_fp32", src)
         e.append(m2_expr.ExprAssign(dst, src))
