@@ -167,8 +167,11 @@ class LocationDB(object):
         assert loc_key in self._loc_keys
         already_existing_loc = self.get_offset_location(offset)
         if already_existing_loc is not None and already_existing_loc != loc_key:
-            raise KeyError("%r is already associated to a different loc_key "
-                           "(%r)" % (offset, already_existing_loc))
+            if not force:
+                raise KeyError("%r is already associated to a different loc_key "
+                               "(%r)" % (offset, already_existing_loc))
+            # The offset is being reassigned: the previous owner loses it.
+            self.unset_location_offset(already_existing_loc)
         already_existing_off = self._loc_key_to_offset.get(loc_key)
         if (already_existing_off is not None and
             already_existing_off != offset):

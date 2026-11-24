@@ -592,6 +592,39 @@ class AsmCFG(DiGraph):
         """
         return self._loc_key_to_block.get(loc_key, None)
 
+    def drop_pending_edges(self):
+        """Drop edges leading to blocks that are not part of the CFG.
+
+        Disassembly can leave dangling destinations behind, for instance when
+        a branch target cannot be decoded or lies outside the dumped code.
+        Such edges cannot be assembled: remove them so that the remaining
+        blocks can still be resolved.
+        """
+        if not self._pendings:
+            return
+        known = set(self._loc_key_to_block.keys())
+        for block in self._loc_key_to_block.values():
+            block.bto = [dst for dst in block.bto if dst in known]
+            block.bto.sort()
+        self._pendings = set()
+
+    def drop_duplicate_next_edges(self):
+        """Keep at most one fall-through (c_next) edge per destination block.
+
+        Coarse or mutated code can yield several fall-through candidates for
+        the same block; only one of them can be assembled.
+        """
+        seen = set()
+        for (src, dst), constraint in list(viewitems(self.edges2constraint)):
+            if constraint != AsmConstraint.c_next:
+                continue
+            if dst in seen:
+                if self.loc_key_to_block(src) is not None and \
+                        self.loc_key_to_block(dst) is not None:
+                    self.del_edge(src, dst)
+            else:
+                seen.add(dst)
+
     def sanity_check(self):
         """Do sanity checks on blocks' constraints:
         * no pendings
@@ -787,7 +820,7 @@ def fix_loc_offset(loc_db, loc_key, offset, modified):
         return
     if loc_offset is not None:
         loc_db.unset_location_offset(loc_key)
-    loc_db.set_location_offset(loc_key, offset)
+    loc_db.set_location_offset(loc_key, offset, force=True)
     modified.add(loc_key)
 
 
@@ -1138,6 +1171,8 @@ def asm_resolve_final(mnemo, asmcfg, dst_interval=None):
     """Resolve and assemble @asmcfg into interval
     @dst_interval"""
 
+    asmcfg.drop_pending_edges()
+    asmcfg.drop_duplicate_next_edges()
     asmcfg.sanity_check()
 
     asmcfg.guess_blocks_size(mnemo)
